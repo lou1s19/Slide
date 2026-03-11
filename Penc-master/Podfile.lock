@@ -1,0 +1,23 @@
+PODS:
+  - Silica (0.1.5)
+  - Sparkle (1.26.0)
+
+DEPENDENCIES:
+  - Silica (from `./Silica`)
+  - Sparkle
+
+SPEC REPOS:
+  trunk:
+    - Sparkle
+
+EXTERNAL SOURCES:
+  Silica:
+    :path: "./Silica"
+
+SPEC CHECKSUMS:
+  Silica: 3b5a774469476ef84fe9d96a63bfe09908654e50
+  Sparkle: d56d028f4b0c123577825f5d1004f6140d77f90e
+
+PODFILE CHECKSUM: 6dac210a5bf210471a9060ce784450d01a8600aa
+
+COCOAPODS: 1.9.3
