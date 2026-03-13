@@ -1,0 +1,13 @@
+.DS_Store
+
+# Xcode user-specific data
+xcuserdata/
+**/xcuserdata/
+*.xcuserstate
+
+# Swift / Xcode build artifacts
+.build/
+DerivedData/
+*.profraw
+*.profdata
+*.xcresult
