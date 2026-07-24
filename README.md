@@ -43,6 +43,8 @@ Core ideas:
 - Fullscreen toggle support
 - On-screen HUD feedback near the pointer
 - Early settings UI for behavior and snapping controls
+- Customizable global keyboard shortcuts for all snap actions (halves, quarters, thirds, maximize, minimize, center), configurable in Settings → Shortcuts
+- Smooth, time-based window animations with a spring easing curve
 
 ## Tech Stack
 

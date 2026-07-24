@@ -29,7 +29,15 @@ class GestureManager {
         let callback: CGEventTapCallBack = { (proxy, type, event, refcon) -> Unmanaged<CGEvent>? in
             guard let refcon = refcon else { return Unmanaged.passRetained(event) }
             let manager = Unmanaged<GestureManager>.fromOpaque(refcon).takeUnretainedValue()
-            
+
+            // macOS silently disables event taps that respond too slowly (or on
+            // certain user input). Without re-enabling, all gestures and
+            // shortcuts would stay dead until app restart.
+            if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+                manager.reenableEventTap()
+                return nil
+            }
+
             if type == .keyDown {
                 if manager.handleKeyDown(event) {
                     return nil // block event
@@ -62,6 +70,13 @@ class GestureManager {
         CGEvent.tapEnable(tap: tap, enable: true)
     }
 
+    fileprivate func reenableEventTap() {
+        if let tap = eventTap {
+            CGEvent.tapEnable(tap: tap, enable: true)
+            print("Slide: Event tap was disabled by the system, re-enabled it")
+        }
+    }
+
     private func stopEventTap() {
         if let tap = eventTap {
             CGEvent.tapEnable(tap: tap, enable: false)
@@ -74,54 +89,29 @@ class GestureManager {
     }
 
     private func handleKeyDown(_ event: CGEvent) -> Bool {
-        let flags = event.flags
-        
-        // Super Modifier: Option (Alternate) + Command
-        let hasOption = flags.contains(.maskAlternate)
-        let hasCommand = flags.contains(.maskCommand)
-        let exactModifier = hasOption && hasCommand && !flags.contains(.maskShift) && !flags.contains(.maskControl)
-        
-        if !exactModifier {
+        let shortcutManager = ShortcutManager.shared
+        guard shortcutManager.isEnabled, !shortcutManager.isCapturingShortcut else { return false }
+
+        let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
+        guard let action = shortcutManager.action(matching: keyCode, flags: event.flags) else {
             return false
         }
-        
-        let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
-        
-        var direction: SwipeDirection? = nil
-        switch keyCode {
-        case 123, 0, 4: direction = .leftHalf    // Left Arrow, A, H
-        case 124, 2, 37: direction = .rightHalf  // Right Arrow, D, L
-        case 125, 1, 38: direction = .minimize   // Down Arrow, S, J
-        case 126, 13, 40: direction = .maximize  // Up Arrow, W, K
-        case 51, 7: direction = .center          // Backspace, X
-        default: return false
+
+        var windowToSnap: AXUIElement? = nil
+        if let window = WindowManager.shared.getWindowUnderCursor(), WindowManager.shared.isMouseInTitleBar(of: window) {
+            windowToSnap = window
+        } else {
+            windowToSnap = WindowManager.shared.getFrontmostWindow()
         }
-        
-        if let dir = direction {
-            var windowToSnap: AXUIElement? = nil
-            if let window = WindowManager.shared.getWindowUnderCursor(), WindowManager.shared.isMouseInTitleBar(of: window) {
-                windowToSnap = window
-            } else {
-                windowToSnap = WindowManager.shared.getFrontmostWindow()
-            }
-            
-            if let window = windowToSnap {
-                activeWindow = window
-                activateAndForeground(window: window)
-                checkAndSnap(direction: dir)
-                
-                let workItem = DispatchWorkItem { [weak self] in
-                    self?.endGestureSequence()
-                }
-                endSwipeWorkItem?.cancel()
-                endSwipeWorkItem = workItem
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: workItem)
-                
-                return true
-            }
-        }
-        
-        return false
+
+        guard let window = windowToSnap else { return false }
+
+        activeWindow = window
+        activateAndForeground(window: window)
+        checkAndSnap(direction: action.direction)
+        scheduleGestureEnd()
+
+        return true
     }
     
     // Internal tracking state
@@ -129,13 +119,32 @@ class GestureManager {
     private var swipeAccumulatorX: CGFloat = 0
     private var swipeAccumulatorY: CGFloat = 0
     private var pinchAccumulator: CGFloat = 0
-    private let swipeThreshold: CGFloat = 60.0 // Increased to make it less sensitive
     private var endSwipeWorkItem: DispatchWorkItem?
     private var idleTimer: DispatchWorkItem?
     private var gestureCountThisSwipe: Int = 0
     private var isPinching: Bool = false
     private var startedInPinch: Bool = false
     private var lastSnappedDirection: SwipeDirection? = nil
+
+    /// Swipe distance needed to trigger an action, driven by the
+    /// "Touch Sensitivity" slider (0 = sluggish 110pt, 1 = snappy 15pt,
+    /// default 0.5 = the previous fixed 60pt).
+    private var swipeThreshold: CGFloat {
+        let defaults = UserDefaults.standard
+        let sensitivity = defaults.object(forKey: "touchSensitivity") == nil ? 0.5 : defaults.double(forKey: "touchSensitivity")
+        return max(15.0, 110.0 - CGFloat(sensitivity) * 100.0)
+    }
+
+    /// Ends the current gesture sequence (and hides the HUD) shortly after
+    /// the last action, unless a follow-up gesture keeps it alive.
+    private func scheduleGestureEnd(after delay: TimeInterval = 0.35) {
+        let workItem = DispatchWorkItem { [weak self] in
+            self?.endGestureSequence()
+        }
+        endSwipeWorkItem?.cancel()
+        endSwipeWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
+    }
 
     private func endGestureSequence() {
         swipeAccumulatorX = 0
@@ -162,14 +171,9 @@ class GestureManager {
                 } else {
                     toggleFullscreen(window: window)
                 }
-                
-                let workItem = DispatchWorkItem { [weak self] in
-                    self?.endGestureSequence()
-                }
-                endSwipeWorkItem?.cancel()
-                endSwipeWorkItem = workItem
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: workItem)
-                
+
+                scheduleGestureEnd()
+
                 return true
             }
             return false
@@ -210,14 +214,9 @@ class GestureManager {
             }
             
             if phase == .ended || phase == .cancelled {
-                let workItem = DispatchWorkItem { [weak self] in
-                    self?.endGestureSequence()
-                }
-                endSwipeWorkItem?.cancel()
-                endSwipeWorkItem = workItem
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: workItem)
+                scheduleGestureEnd()
             }
-            
+
             return true
         }
         
@@ -281,11 +280,7 @@ class GestureManager {
             }
         } else if phase == .ended || phase == .cancelled {
             idleTimer?.cancel()
-            let workItem = DispatchWorkItem { [weak self] in
-                self?.endGestureSequence()
-            }
-            endSwipeWorkItem = workItem
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: workItem)
+            scheduleGestureEnd()
         }
         
         return true
@@ -399,9 +394,12 @@ class GestureManager {
 
     private func checkAndSnap(direction: SwipeDirection) {
         lastSnappedDirection = direction
-        
-        // Haptic feedback for locking in
-        NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .default)
+
+        // Haptic feedback for locking in (respects the settings toggle)
+        let hapticsEnabled = UserDefaults.standard.object(forKey: "hapticFeedback") == nil ? true : UserDefaults.standard.bool(forKey: "hapticFeedback")
+        if hapticsEnabled {
+            NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .default)
+        }
         
         guard let window = activeWindow else { return }
         guard let currentScreen = getScreenForWindow(window) else { return }
@@ -509,10 +507,10 @@ class GestureManager {
             }
             
             var targetRect = CGRect(origin: newPosition, size: newSize)
-            
-            // Apply window gaps (padding)
-            let windowGap: CGFloat = 3.0
-            if direction != .center && direction != .minimize && direction != .close {
+
+            // Apply window gaps, driven by the "Grid Spacing" slider (0-16pt)
+            let windowGap = CGFloat(UserDefaults.standard.double(forKey: "gridSpacing")) * 16.0
+            if windowGap > 0 && direction != .center && direction != .minimize && direction != .close {
                 targetRect = targetRect.insetBy(dx: windowGap, dy: windowGap)
             }
             

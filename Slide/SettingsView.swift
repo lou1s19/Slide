@@ -4,12 +4,14 @@ enum SettingsTab: String, CaseIterable {
     case general = "General"
     case windows = "Windows"
     case snapping = "Snapping"
-    
+    case shortcuts = "Shortcuts"
+
     var icon: String {
         switch self {
         case .general: return "gearshape"
         case .windows: return "macwindow"
         case .snapping: return "uiwindow.split.2x1"
+        case .shortcuts: return "keyboard"
         }
     }
 }
@@ -50,6 +52,8 @@ struct SettingsView: View {
                     WindowControlsView()
                 case .snapping:
                     GridSnappingView()
+                case .shortcuts:
+                    ShortcutsSettingsView()
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -238,7 +242,7 @@ struct GridSnappingView: View {
                 
                 SettingsSection(title: "Behavior") {
                     ToggleSettingRow(title: "Native Window Tiling", isOn: $nativeWindowTiling, description: "Combine native macOS drag to edge tiling with Slide's 2x2 snapping gestures.")
-                    SliderSettingRow(title: "Grid Spacing", value: $gridSpacing, range: 0...1, label: gridSpacing == 0 ? "Off" : "On")
+                    SliderSettingRow(title: "Grid Spacing", value: $gridSpacing, range: 0...1, label: gridSpacing == 0 ? "Off" : "\(Int((gridSpacing * 16).rounded())) pt")
                     Text("A small distance between windows and screen edges can visually declutter your desktop.")
                         .font(.caption)
                         .foregroundColor(.secondary)
@@ -264,7 +268,166 @@ struct GridSnappingView: View {
     }
 }
 
-// Removed unused views
+// MARK: - Shortcuts
+
+struct ShortcutsSettingsView: View {
+    @ObservedObject private var shortcutManager = ShortcutManager.shared
+    @AppStorage("keyboardShortcutsEnabled") private var shortcutsEnabled: Bool = true
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 25) {
+                SettingsHeader(title: "Shortcuts")
+                Text("Trigger any snap action from the keyboard — works on the window under the cursor, otherwise on the frontmost window.")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                    .padding(.bottom, 5)
+
+                SettingsSection(title: "Keyboard Control") {
+                    ToggleSettingRow(title: "Enable Keyboard Shortcuts", isOn: $shortcutsEnabled, description: "Global shortcuts work in every app while Slide is running.")
+                }
+
+                Group {
+                    SettingsSection(title: "Basics") {
+                        ForEach([SnapAction.leftHalf, .rightHalf, .maximize, .minimize, .center]) { action in
+                            ShortcutRow(action: action)
+                        }
+                    }
+
+                    SettingsSection(title: "Quarters") {
+                        ForEach([SnapAction.topLeftQuarter, .topRightQuarter, .bottomLeftQuarter, .bottomRightQuarter]) { action in
+                            ShortcutRow(action: action)
+                        }
+                    }
+
+                    SettingsSection(title: "Thirds") {
+                        ForEach([SnapAction.leftThird, .middleThird, .rightThird]) { action in
+                            ShortcutRow(action: action)
+                        }
+                    }
+
+                    HStack {
+                        Text("Click a shortcut to record a new one. Press ⎋ to cancel, ⌫ to remove.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Spacer()
+                        Button("Reset to Defaults") {
+                            shortcutManager.resetToDefaults()
+                        }
+                    }
+                }
+                .disabled(!shortcutsEnabled)
+                .opacity(shortcutsEnabled ? 1 : 0.4)
+
+                Spacer()
+            }
+            .padding(30)
+        }
+    }
+}
+
+struct ShortcutRow: View {
+    let action: SnapAction
+
+    var body: some View {
+        HStack(spacing: 15) {
+            Image(systemName: action.direction.iconName)
+                .foregroundColor(.purple)
+                .font(.title3)
+                .frame(width: 24)
+
+            Text(action.title)
+                .font(.body)
+                .fontWeight(.medium)
+
+            Spacer()
+
+            ShortcutRecorderButton(action: action)
+        }
+        .padding()
+        Divider().background(Color.white.opacity(0.1))
+    }
+}
+
+struct ShortcutRecorderButton: View {
+    let action: SnapAction
+    @ObservedObject private var shortcutManager = ShortcutManager.shared
+    @State private var isRecording = false
+    @State private var keyMonitor: Any?
+
+    var body: some View {
+        Button(action: {
+            if isRecording {
+                stopRecording()
+            } else {
+                startRecording()
+            }
+        }) {
+            Text(labelText)
+                .font(.system(size: 13, weight: .medium, design: .monospaced))
+                .foregroundColor(isRecording ? .purple : (shortcutManager.shortcuts[action] == nil ? .secondary : .primary))
+                .frame(minWidth: 100)
+                .padding(.vertical, 5)
+                .padding(.horizontal, 10)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(Color.white.opacity(isRecording ? 0.15 : 0.08))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(isRecording ? Color.purple : Color.white.opacity(0.15), lineWidth: 1)
+                )
+        }
+        .buttonStyle(.plain)
+        .onDisappear { stopRecording() }
+    }
+
+    private var labelText: String {
+        if isRecording { return "Type shortcut…" }
+        return shortcutManager.shortcuts[action]?.displayString ?? "None"
+    }
+
+    private func startRecording() {
+        isRecording = true
+        // Tell the global event tap to let key events through while recording
+        shortcutManager.isCapturingShortcut = true
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            handleRecordedEvent(event)
+            return nil // swallow the event while recording
+        }
+    }
+
+    private func handleRecordedEvent(_ event: NSEvent) {
+        let modifiers = event.modifierFlags.intersection(KeyboardShortcut.relevantModifiers)
+
+        if event.keyCode == 53 { // Esc cancels
+            stopRecording()
+            return
+        }
+        if event.keyCode == 51 && modifiers.isEmpty { // plain Backspace clears
+            shortcutManager.setShortcut(nil, for: action)
+            stopRecording()
+            return
+        }
+        // Require ⌘, ⌥ or ⌃ so a global shortcut can never block plain typing
+        guard !modifiers.intersection([.command, .option, .control]).isEmpty else {
+            NSSound.beep()
+            return
+        }
+
+        shortcutManager.setShortcut(KeyboardShortcut(keyCode: event.keyCode, modifiers: modifiers), for: action)
+        stopRecording()
+    }
+
+    private func stopRecording() {
+        if let monitor = keyMonitor {
+            NSEvent.removeMonitor(monitor)
+            keyMonitor = nil
+        }
+        isRecording = false
+        shortcutManager.isCapturingShortcut = false
+    }
+}
 
 // MARK: - Reusable UI Components
 
