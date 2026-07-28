@@ -137,7 +137,7 @@ class SmoothAnimator {
         switch alignment {
         case .rightHalf, .topRightQuarter, .bottomRightQuarter, .rightThird, .topRightSixth, .bottomRightSixth:
             finalPosition.x = idealRect.maxX - actualSize.width
-        case .leftHalf, .topLeftQuarter, .bottomLeftQuarter, .maximize, .minimize, .leftThird, .topLeftSixth, .bottomLeftSixth:
+        case .leftHalf, .topLeftQuarter, .bottomLeftQuarter, .maximize, .minimize, .leftThird, .topLeftSixth, .bottomLeftSixth, .restore:
             finalPosition.x = idealRect.minX
         case .center, .close, .middleThird, .topMiddleSixth, .bottomMiddleSixth:
             finalPosition.x = idealRect.midX - (actualSize.width / 2)
@@ -146,7 +146,7 @@ class SmoothAnimator {
         switch alignment {
         case .bottomLeftQuarter, .bottomRightQuarter, .bottomLeftSixth, .bottomMiddleSixth, .bottomRightSixth:
             finalPosition.y = idealRect.maxY - actualSize.height
-        case .leftHalf, .rightHalf, .maximize, .minimize, .topLeftQuarter, .topRightQuarter, .leftThird, .middleThird, .rightThird, .topLeftSixth, .topMiddleSixth, .topRightSixth:
+        case .leftHalf, .rightHalf, .maximize, .minimize, .topLeftQuarter, .topRightQuarter, .leftThird, .middleThird, .rightThird, .topLeftSixth, .topMiddleSixth, .topRightSixth, .restore:
             finalPosition.y = idealRect.minY
         case .center, .close:
             finalPosition.y = idealRect.midY - (actualSize.height / 2)

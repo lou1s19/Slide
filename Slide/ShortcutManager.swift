@@ -57,7 +57,7 @@ struct KeyboardShortcut: Codable, Equatable {
 
 /// Every window action that can be triggered from the keyboard.
 enum SnapAction: String, CaseIterable, Identifiable {
-    case leftHalf, rightHalf, maximize, minimize, center
+    case leftHalf, rightHalf, maximize, minimize, center, restore
     case topLeftQuarter, topRightQuarter, bottomLeftQuarter, bottomRightQuarter
     case leftThird, middleThird, rightThird
 
@@ -70,6 +70,7 @@ enum SnapAction: String, CaseIterable, Identifiable {
         case .maximize: return .maximize
         case .minimize: return .minimize
         case .center: return .center
+        case .restore: return .restore
         case .topLeftQuarter: return .topLeftQuarter
         case .topRightQuarter: return .topRightQuarter
         case .bottomLeftQuarter: return .bottomLeftQuarter
@@ -87,6 +88,7 @@ enum SnapAction: String, CaseIterable, Identifiable {
         case .maximize: return "Maximize"
         case .minimize: return "Minimize"
         case .center: return "Center"
+        case .restore: return "Restore Previous Size"
         case .topLeftQuarter: return "Top Left Quarter"
         case .topRightQuarter: return "Top Right Quarter"
         case .bottomLeftQuarter: return "Bottom Left Quarter"
@@ -107,6 +109,7 @@ enum SnapAction: String, CaseIterable, Identifiable {
         case .maximize: return KeyboardShortcut(keyCode: 126, modifiers: optCmd)
         case .minimize: return KeyboardShortcut(keyCode: 125, modifiers: optCmd)
         case .center: return KeyboardShortcut(keyCode: 51, modifiers: optCmd)
+        case .restore: return KeyboardShortcut(keyCode: 15, modifiers: optCmd) // ⌥⌘R
         default: return nil
         }
     }
@@ -123,21 +126,23 @@ class ShortcutManager: ObservableObject {
     var isCapturingShortcut: Bool = false
 
     private let defaults: UserDefaults
-    private static let initializedKey = "shortcuts.initialized"
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
 
-        // First launch: persist the defaults so storage stays authoritative
-        // afterwards (a cleared shortcut must stay cleared across restarts).
-        if !defaults.bool(forKey: Self.initializedKey) {
-            for action in SnapAction.allCases {
+        // Seed each action's default once, so storage stays authoritative
+        // afterwards (a cleared shortcut must stay cleared across restarts)
+        // while actions added in later versions still get their default.
+        for action in SnapAction.allCases {
+            let seededKey = Self.seededKey(for: action)
+            if !defaults.bool(forKey: seededKey) {
                 if let shortcut = action.defaultShortcut,
+                   defaults.data(forKey: Self.storageKey(for: action)) == nil,
                    let data = try? JSONEncoder().encode(shortcut) {
                     defaults.set(data, forKey: Self.storageKey(for: action))
                 }
+                defaults.set(true, forKey: seededKey)
             }
-            defaults.set(true, forKey: Self.initializedKey)
         }
 
         var loaded: [SnapAction: KeyboardShortcut] = [:]
@@ -202,5 +207,9 @@ class ShortcutManager: ObservableObject {
 
     private static func storageKey(for action: SnapAction) -> String {
         "shortcut.\(action.rawValue)"
+    }
+
+    private static func seededKey(for action: SnapAction) -> String {
+        "shortcut.seeded.\(action.rawValue)"
     }
 }

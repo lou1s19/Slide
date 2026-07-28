@@ -102,6 +102,58 @@ struct ShortcutTests {
             _ = action.direction
         }
     }
+
+    @Test func restoreHasDefaultShortcut() {
+        let manager = ShortcutManager(defaults: freshDefaults())
+        #expect(manager.shortcut(for: .restore) == KeyboardShortcut(keyCode: 15, modifiers: [.option, .command]))
+        #expect(manager.action(matching: 15, flags: [.maskAlternate, .maskCommand]) == .restore)
+    }
+}
+
+@MainActor
+struct ExclusionTests {
+
+    private func freshDefaults() -> UserDefaults {
+        let suiteName = "SlideTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        return defaults
+    }
+
+    @Test func startsEmpty() {
+        let manager = ExclusionManager(defaults: freshDefaults())
+        #expect(manager.excludedBundleIDs.isEmpty)
+        #expect(!manager.isExcluded(bundleID: "com.example.app"))
+        #expect(!manager.isExcluded(bundleID: nil))
+    }
+
+    @Test func addAndRemovePersist() {
+        let defaults = freshDefaults()
+
+        let manager = ExclusionManager(defaults: defaults)
+        manager.add(bundleID: "com.example.game")
+        manager.add(bundleID: "com.example.game") // duplicate is ignored
+        manager.add(bundleID: "   ") // blank is ignored
+
+        #expect(manager.excludedBundleIDs == ["com.example.game"])
+        #expect(manager.isExcluded(bundleID: "com.example.game"))
+
+        let reloaded = ExclusionManager(defaults: defaults)
+        #expect(reloaded.isExcluded(bundleID: "com.example.game"))
+
+        reloaded.remove(bundleID: "com.example.game")
+        #expect(!reloaded.isExcluded(bundleID: "com.example.game"))
+
+        let reloadedAgain = ExclusionManager(defaults: defaults)
+        #expect(reloadedAgain.excludedBundleIDs.isEmpty)
+    }
+
+    @Test func listIsSorted() {
+        let manager = ExclusionManager(defaults: freshDefaults())
+        manager.add(bundleID: "com.zeta.app")
+        manager.add(bundleID: "com.alpha.app")
+        #expect(manager.excludedBundleIDs == ["com.alpha.app", "com.zeta.app"])
+    }
 }
 
 @MainActor

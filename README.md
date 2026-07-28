@@ -43,8 +43,13 @@ Core ideas:
 - Fullscreen toggle support
 - On-screen HUD feedback near the pointer
 - Early settings UI for behavior and snapping controls
-- Customizable global keyboard shortcuts for all snap actions (halves, quarters, thirds, maximize, minimize, center), configurable in Settings → Shortcuts
+- Customizable global keyboard shortcuts for all snap actions (halves, quarters, thirds, maximize, minimize, center, restore), configurable in Settings → Shortcuts
 - Smooth, time-based window animations with a spring easing curve
+- Restore a window to the size and position it had before its first snap (default ⌥⌘R)
+- Snap preview overlay that briefly highlights the target area
+- Per-app exclusion list so games and drawing apps are left alone
+- Launch at Login and a hideable menu bar icon
+- Esc (or resting for the configurable timeout) cancels a running gesture
 
 ## Tech Stack
 
@@ -129,6 +134,4 @@ If you want to become an early contributor, open an issue or submit a pull reque
 
 ## License
 
-No license file is included yet.
-
-Before accepting outside contributions long-term, you should add an explicit open source license such as MIT or Apache-2.0.
+Slide is released under the [MIT License](LICENSE).

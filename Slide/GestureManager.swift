@@ -89,10 +89,19 @@ class GestureManager {
     }
 
     private func handleKeyDown(_ event: CGEvent) -> Bool {
+        let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
+
+        // Esc cancels a running gesture immediately
+        if keyCode == 53 && activeWindow != nil {
+            endSwipeWorkItem?.cancel()
+            idleTimer?.cancel()
+            endGestureSequence()
+            return true
+        }
+
         let shortcutManager = ShortcutManager.shared
         guard shortcutManager.isEnabled, !shortcutManager.isCapturingShortcut else { return false }
 
-        let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
         guard let action = shortcutManager.action(matching: keyCode, flags: event.flags) else {
             return false
         }
@@ -104,7 +113,7 @@ class GestureManager {
             windowToSnap = WindowManager.shared.getFrontmostWindow()
         }
 
-        guard let window = windowToSnap else { return false }
+        guard let window = windowToSnap, !ExclusionManager.shared.isExcluded(window: window) else { return false }
 
         activeWindow = window
         activateAndForeground(window: window)
@@ -125,6 +134,31 @@ class GestureManager {
     private var isPinching: Bool = false
     private var startedInPinch: Bool = false
     private var lastSnappedDirection: SwipeDirection? = nil
+
+    /// Hashable wrapper so AXUIElements can key the saved-frame store.
+    private struct WindowKey: Hashable {
+        let element: AXUIElement
+
+        init(_ element: AXUIElement) { self.element = element }
+
+        static func == (lhs: WindowKey, rhs: WindowKey) -> Bool {
+            CFEqual(lhs.element, rhs.element)
+        }
+
+        func hash(into hasher: inout Hasher) {
+            hasher.combine(CFHash(element))
+        }
+    }
+
+    /// The frame each window had before its first snap, for the Restore action.
+    private var savedFrames: [WindowKey: CGRect] = [:]
+
+    /// How long a resting finger keeps a gesture alive, driven by the
+    /// "Cancel Timeout" slider.
+    private var gestureIdleTimeout: TimeInterval {
+        let defaults = UserDefaults.standard
+        return defaults.object(forKey: "cancelTimeout") == nil ? 2.0 : defaults.double(forKey: "cancelTimeout")
+    }
 
     /// Swipe distance needed to trigger an action, driven by the
     /// "Touch Sensitivity" slider (0 = sluggish 110pt, 1 = snappy 15pt,
@@ -162,7 +196,7 @@ class GestureManager {
     private func handleEvent(_ event: NSEvent) -> Bool {
         // --- Smart Magnify (Double Tap) ---
         if event.type == .smartMagnify {
-            if let window = WindowManager.shared.getWindowUnderCursor(), WindowManager.shared.isMouseInTitleBar(of: window) {
+            if let window = WindowManager.shared.getWindowUnderCursor(), WindowManager.shared.isMouseInTitleBar(of: window), !ExclusionManager.shared.isExcluded(window: window) {
                 activeWindow = window
                 activateAndForeground(window: window)
                 
@@ -187,7 +221,7 @@ class GestureManager {
                 isPinching = false
                 startedInPinch = true
                 pinchAccumulator = 0
-                if let window = WindowManager.shared.getWindowUnderCursor(), WindowManager.shared.isMouseInTitleBar(of: window) {
+                if let window = WindowManager.shared.getWindowUnderCursor(), WindowManager.shared.isMouseInTitleBar(of: window), !ExclusionManager.shared.isExcluded(window: window) {
                     activeWindow = window
                     activateAndForeground(window: window)
                 } else {
@@ -233,7 +267,7 @@ class GestureManager {
             let isContinuing = (activeWindow != nil && gestureCountThisSwipe > 0 && !startedInPinch)
             if !isContinuing {
                 endGestureSequence()
-                if let window = WindowManager.shared.getWindowUnderCursor(), WindowManager.shared.isMouseInTitleBar(of: window) {
+                if let window = WindowManager.shared.getWindowUnderCursor(), WindowManager.shared.isMouseInTitleBar(of: window), !ExclusionManager.shared.isExcluded(window: window) {
                     activeWindow = window
                     activateAndForeground(window: window)
                 }
@@ -252,7 +286,7 @@ class GestureManager {
                 self?.endGestureSequence()
             }
             idleTimer = idleWorkItem
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0, execute: idleWorkItem)
+            DispatchQueue.main.asyncAfter(deadline: .now() + gestureIdleTimeout, execute: idleWorkItem)
             
             swipeAccumulatorX += event.scrollingDeltaX
             swipeAccumulatorY += event.scrollingDeltaY
@@ -393,15 +427,16 @@ class GestureManager {
     }
 
     private func checkAndSnap(direction: SwipeDirection) {
-        lastSnappedDirection = direction
-
-        // Haptic feedback for locking in (respects the settings toggle)
-        let hapticsEnabled = UserDefaults.standard.object(forKey: "hapticFeedback") == nil ? true : UserDefaults.standard.bool(forKey: "hapticFeedback")
-        if hapticsEnabled {
-            NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .default)
-        }
-        
         guard let window = activeWindow else { return }
+
+        if direction == .restore {
+            restorePreviousFrame(of: window)
+            return
+        }
+
+        lastSnappedDirection = direction
+        performHapticFeedback()
+
         guard let currentScreen = getScreenForWindow(window) else { return }
         
         var targetScreen = currentScreen
@@ -481,8 +516,8 @@ class GestureManager {
         case .bottomRightSixth:
             newPosition = CGPoint(x: axScreenRect.minX + 2 * (axScreenRect.width / 3), y: axScreenRect.minY + (axScreenRect.height / 2))
             newSize = CGSize(width: axScreenRect.width / 3, height: axScreenRect.height / 2)
-        case .close:
-            return // Handled specifically in magnifier event intercept
+        case .close, .restore:
+            return // Handled before reaching this switch
         }
         
         // Show HUD Feedback
@@ -493,19 +528,15 @@ class GestureManager {
         if shouldMinimize {
             AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, true as CFTypeRef)
         } else {
-            var currentPos = CGPoint.zero
-            var currentSize = CGSize.zero
-            
-            var posValue: CFTypeRef?
-            var sizeValue: CFTypeRef?
-            if AXUIElementCopyAttributeValue(window, kAXPositionAttribute as CFString, &posValue) == .success,
-               AXUIElementCopyAttributeValue(window, kAXSizeAttribute as CFString, &sizeValue) == .success {
-                if let pVal = posValue, let sVal = sizeValue, CFGetTypeID(pVal) == AXValueGetTypeID(), CFGetTypeID(sVal) == AXValueGetTypeID() {
-                    AXValueGetValue(pVal as! AXValue, .cgPoint, &currentPos)
-                    AXValueGetValue(sVal as! AXValue, .cgSize, &currentSize)
-                }
+            let current = readFrame(of: window)
+
+            // Remember the pre-snap frame once, so Restore can bring it back
+            let key = WindowKey(window)
+            if savedFrames[key] == nil, current.size.width > 1, current.size.height > 1 {
+                if savedFrames.count > 64 { savedFrames.removeAll() }
+                savedFrames[key] = CGRect(origin: current.position, size: current.size)
             }
-            
+
             var targetRect = CGRect(origin: newPosition, size: newSize)
 
             // Apply window gaps, driven by the "Grid Spacing" slider (0-16pt)
@@ -513,15 +544,77 @@ class GestureManager {
             if windowGap > 0 && direction != .center && direction != .minimize && direction != .close {
                 targetRect = targetRect.insetBy(dx: windowGap, dy: windowGap)
             }
-            
+
+            // Flash the snap target so the user sees where the window will land
+            let previewRect = cocoaRect(fromAXRect: targetRect)
+            DispatchQueue.main.async {
+                SnapPreviewManager.shared.flash(rect: previewRect)
+            }
+
             SmoothAnimator.animateWindow(
                 window: window,
-                startPosition: currentPos,
-                startSize: currentSize,
+                startPosition: current.position,
+                startSize: current.size,
                 targetRect: targetRect,
                 alignment: direction
             )
         }
+    }
+
+    /// Moves a window back to the frame it had before its first snap.
+    /// Falls back to centering when there is nothing to restore.
+    private func restorePreviousFrame(of window: AXUIElement) {
+        guard let saved = savedFrames.removeValue(forKey: WindowKey(window)) else {
+            checkAndSnap(direction: .center)
+            return
+        }
+
+        lastSnappedDirection = nil
+        performHapticFeedback()
+
+        let current = readFrame(of: window)
+        let previewRect = cocoaRect(fromAXRect: saved)
+        DispatchQueue.main.async {
+            HUDManager.shared.showHUD(direction: .restore, at: NSEvent.mouseLocation)
+            SnapPreviewManager.shared.flash(rect: previewRect)
+        }
+
+        SmoothAnimator.animateWindow(
+            window: window,
+            startPosition: current.position,
+            startSize: current.size,
+            targetRect: saved,
+            alignment: .restore
+        )
+    }
+
+    private func performHapticFeedback() {
+        let enabled = UserDefaults.standard.object(forKey: "hapticFeedback") == nil ? true : UserDefaults.standard.bool(forKey: "hapticFeedback")
+        if enabled {
+            NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .default)
+        }
+    }
+
+    private func readFrame(of window: AXUIElement) -> (position: CGPoint, size: CGSize) {
+        var position = CGPoint.zero
+        var size = CGSize.zero
+        var posValue: CFTypeRef?
+        var sizeValue: CFTypeRef?
+        if AXUIElementCopyAttributeValue(window, kAXPositionAttribute as CFString, &posValue) == .success,
+           AXUIElementCopyAttributeValue(window, kAXSizeAttribute as CFString, &sizeValue) == .success,
+           let pVal = posValue, let sVal = sizeValue,
+           CFGetTypeID(pVal) == AXValueGetTypeID(), CFGetTypeID(sVal) == AXValueGetTypeID() {
+            AXValueGetValue(pVal as! AXValue, .cgPoint, &position)
+            AXValueGetValue(sVal as! AXValue, .cgSize, &size)
+        }
+        return (position, size)
+    }
+
+    /// Converts a rect from Accessibility coordinates (top-left origin of the
+    /// main screen) to Cocoa screen coordinates (bottom-left origin).
+    private func cocoaRect(fromAXRect rect: CGRect) -> NSRect {
+        guard let mainScreen = NSScreen.screens.first else { return rect }
+        return NSRect(x: rect.minX, y: mainScreen.frame.height - rect.minY - rect.height, width: rect.width, height: rect.height)
     }
     
     // MARK: - App & Native Helpers

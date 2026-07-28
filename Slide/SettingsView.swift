@@ -1,4 +1,6 @@
 import SwiftUI
+import ServiceManagement
+import UniformTypeIdentifiers
 
 enum SettingsTab: String, CaseIterable {
     case general = "General"
@@ -99,19 +101,17 @@ struct GeneralSettingsView: View {
     @AppStorage("showInMenubar") private var showInMenubar: Bool = true
     @AppStorage("hapticFeedback") private var hapticFeedback: Bool = true
     @AppStorage("touchSensitivity") private var touchSensitivity: Double = 0.5
-    @AppStorage("tapAndHold") private var tapAndHold: Bool = true
-    @AppStorage("cancelTimeout") private var cancelTimeout: Double = 0.8
+    @AppStorage("cancelTimeout") private var cancelTimeout: Double = 2.0
     @AppStorage("showTooltips") private var showTooltips: Bool = true
     @AppStorage("tooltipSize") private var tooltipSize: Double = 0.5
-    @AppStorage("hideCursor") private var hideCursor: Bool = true
     @AppStorage("showLiveTooltips") private var showLiveTooltips: Bool = true
     @AppStorage("useAnimations") private var useAnimations: Bool = true
-    
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 25) {
                 SettingsHeader(title: "System")
-                
+
                 SettingsSection(title: "System Integration") {
                     HStack {
                         ToggleSettingRow(title: "Launch at Login", isOn: $launchAtLogin)
@@ -123,101 +123,153 @@ struct GeneralSettingsView: View {
                         .padding(.horizontal)
                         .padding(.bottom, 10)
                 }
-                
+
                 SettingsHeader(title: "Gestures")
-                
+
                 SettingsSection(title: "Feedback & Timing") {
                     ToggleSettingRow(title: "Window Animations", isOn: $useAnimations, description: "Smoothly animate windows when snapping.")
                     ToggleSettingRow(title: "Haptic Feedback", isOn: $hapticFeedback, description: "Slide will provide haptic feedback if enabled via System Settings.")
-                    
-                    HStack {
-                        SliderSettingRow(title: "Touch Sensitivity", value: $touchSensitivity, range: 0...1, label: "Very Snappy")
-                        ToggleSettingRow(title: "Tap & Hold", isOn: $tapAndHold)
-                    }
-                    Text("Depending on your hardware, you might want to decrease sensitivity.")
+
+                    SliderSettingRow(title: "Touch Sensitivity", value: $touchSensitivity, range: 0...1, label: touchSensitivity > 0.75 ? "Very Snappy" : (touchSensitivity < 0.25 ? "Relaxed" : "Balanced"))
+                    Text("Higher sensitivity means shorter swipes trigger actions. Depending on your hardware, you might want to decrease sensitivity.")
                         .font(.caption)
                         .foregroundColor(.secondary)
                         .padding(.horizontal)
                         .padding(.bottom, 10)
-                    
-                    SliderSettingRow(title: "Cancel Timeout", value: $cancelTimeout, range: 0.1...2.0, label: String(format: "%.1f Seconds", cancelTimeout))
+
+                    SliderSettingRow(title: "Cancel Timeout", value: $cancelTimeout, range: 0.5...3.0, label: String(format: "%.1f Seconds", cancelTimeout))
                     Text("Cancel gestures by pressing Esc or resting for the specified timeout.")
                         .font(.caption)
                         .foregroundColor(.secondary)
                         .padding(.horizontal)
                         .padding(.bottom, 10)
                 }
-                
+
                 SettingsHeader(title: "Tooltips")
-                
+
                 SettingsSection(title: "Visual Guides") {
                     HStack {
                         ToggleSettingRow(title: "Show Tooltips", isOn: $showTooltips)
                         SliderSettingRow(title: "Size", value: $tooltipSize, range: 0...1, label: "")
-                        ToggleSettingRow(title: "Hide Cursor", isOn: $hideCursor)
                     }
                     Text("Tooltips will always let you know what's going on.")
                         .font(.caption)
                         .foregroundColor(.secondary)
                         .padding(.horizontal)
                         .padding(.bottom, 10)
-                    
-                    ToggleSettingRow(title: "Show Live Tooltips", isOn: $showLiveTooltips, description: "Live tooltips provide animated snapping previews.")
+
+                    ToggleSettingRow(title: "Show Snap Preview", isOn: $showLiveTooltips, description: "Briefly highlights the target area a window is about to snap into.")
                 }
-                
+
+                SettingsHeader(title: "Excluded Apps")
+
+                ExcludedAppsSection()
+
                 Spacer()
             }
             .padding(30)
+        }
+        .onAppear {
+            // The system is the source of truth for the login item state
+            launchAtLogin = (SMAppService.mainApp.status == .enabled)
+        }
+        .onChange(of: launchAtLogin) { _, newValue in
+            do {
+                if newValue {
+                    try SMAppService.mainApp.register()
+                } else {
+                    try SMAppService.mainApp.unregister()
+                }
+            } catch {
+                print("Slide: Failed to update login item: \(error)")
+            }
+        }
+    }
+}
+
+struct ExcludedAppsSection: View {
+    @ObservedObject private var exclusionManager = ExclusionManager.shared
+
+    var body: some View {
+        SettingsSection(title: "Slide is disabled for these apps") {
+            if exclusionManager.excludedBundleIDs.isEmpty {
+                Text("No apps excluded. Add games or drawing apps whose windows Slide should never touch.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding()
+            } else {
+                ForEach(exclusionManager.excludedBundleIDs, id: \.self) { bundleID in
+                    HStack {
+                        Image(systemName: "app.dashed")
+                            .foregroundColor(.secondary)
+                            .frame(width: 24)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(exclusionManager.displayName(for: bundleID))
+                                .font(.body)
+                            Text(bundleID)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        Spacer()
+                        Button(action: { exclusionManager.remove(bundleID: bundleID) }) {
+                            Image(systemName: "minus.circle.fill")
+                                .foregroundColor(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.horizontal)
+                    .padding(.vertical, 8)
+                    Divider().background(Color.white.opacity(0.1))
+                }
+            }
+
+            HStack {
+                Spacer()
+                Button("Add App…") {
+                    addAppViaPanel()
+                }
+            }
+            .padding()
+        }
+    }
+
+    private func addAppViaPanel() {
+        let panel = NSOpenPanel()
+        panel.directoryURL = URL(fileURLWithPath: "/Applications")
+        panel.allowedContentTypes = [.application]
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.message = "Choose apps Slide should ignore"
+
+        if panel.runModal() == .OK {
+            for url in panel.urls {
+                if let bundleID = Bundle(url: url)?.bundleIdentifier {
+                    exclusionManager.add(bundleID: bundleID)
+                }
+            }
         }
     }
 }
 
 struct WindowControlsView: View {
-    @AppStorage("missionControlGestures") private var missionControlGestures: Bool = true
-    
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 25) {
                 SettingsHeader(title: "Windows")
-                Text("Control basic functionality by swiping and pinching on window titlebars.")
+                Text("Control basic functionality by swiping and pinching while the pointer rests on a window's title bar.")
                     .font(.subheadline)
                     .foregroundColor(.secondary)
                     .padding(.bottom, 5)
-                
-                SettingsSection(title: "Core") {
-                    ToggleSettingRow(title: "Mission Control", isOn: $missionControlGestures, description: "Most Window and Snapping gestures also work in Mission Control & App Exposé.")
-                    
-                    HStack {
-                        Text("General Modifier")
-                            .font(.body)
-                            .fontWeight(.medium)
-                        Image(systemName: "command")
-                            .padding(4)
-                            .background(Color.white.opacity(0.1))
-                            .cornerRadius(4)
-                    }
-                    .padding()
-                    
-                    Divider().background(Color.white.opacity(0.1))
-                    
-                    GestureRow(icon: "xmark.circle.fill", iconColor: .red, title: "Quit", gestureIcon: "arrow.down.right.and.arrow.up.left",  description: "Pinch in twice to quit an application.")
-                    GestureRow(icon: "xmark.circle", iconColor: .red, title: "Close", gestureIcon: "arrow.down.right.and.arrow.up.left", description: "Pinch in once to close a window.")
+
+                SettingsSection(title: "Window Actions") {
+                    GestureRow(icon: "xmark.circle", iconColor: .red, title: "Close", gestureIcon: "arrow.down.right.and.arrow.up.left", description: "Pinch in to close a window.")
                     GestureRow(icon: "minus.circle.fill", iconColor: .yellow, title: "Minimize", gestureIcon: "arrow.down", description: "Swipe down once to minimize a window.")
-                    GestureRow(icon: "plus.circle.fill", iconColor: .green, title: "Fullscreen", gestureIcon: "arrow.up.left.and.arrow.down.right", description: "Pinch out or tap, hold and swipe up to enter or exit fullscreen mode.")
-                    GestureRow(icon: "eye.slash.fill", iconColor: .gray, title: "Hide", gestureIcon: "hand.tap.file", description: "Double tap with the general modifier to hide all windows of an application.")
+                    GestureRow(icon: "plus.circle.fill", iconColor: .green, title: "Fullscreen", gestureIcon: "hand.tap", description: "Double-tap with two fingers on the title bar to toggle fullscreen.")
+                    GestureRow(icon: "rectangle.center.inset.filled", iconColor: .blue, title: "Center", gestureIcon: "arrow.up.left.and.arrow.down.right", description: "Pinch out — or double-tap while holding ⌥ — to center a window at 70% size.")
                 }
-                
-                SettingsHeader(title: "Tabs")
-                Text("Control tabs in native macOS windows.")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-                    .padding(.bottom, 5)
-                
-                SettingsSection(title: "Tab Management") {
-                    GestureRow(icon: "xmark.circle", iconColor: .blue, title: "Close Tab", gestureIcon: "arrow.down.right.and.arrow.up.left", description: "Pinch in to close a tab.")
-                    GestureRow(icon: "circle.fill.pattern.3.to.3.blue", iconColor: .gray, title: "Detach", gestureIcon: "hand.tap.file", description: "Tap and hold to detach a native tab into a new window.")
-                }
-                
+
                 Spacer()
             }
             .padding(30)
@@ -226,41 +278,33 @@ struct WindowControlsView: View {
 }
 
 struct GridSnappingView: View {
-    @AppStorage("nativeWindowTiling") private var nativeWindowTiling: Bool = true
     @AppStorage("gridSpacing") private var gridSpacing: Double = 0.0
-    @AppStorage("dragToUnsnap") private var dragToUnsnap: Bool = true
-    @AppStorage("resizeAdjacent") private var resizeAdjacent: Bool = true
-    
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 25) {
                 SettingsHeader(title: "Snapping")
-                Text("Snap windows to a 2x2, 3x2 or 3x3 grid.")
+                Text("Snap windows to halves, quarters, thirds and sixths.")
                     .font(.subheadline)
                     .foregroundColor(.secondary)
                     .padding(.bottom, 5)
-                
+
                 SettingsSection(title: "Behavior") {
-                    ToggleSettingRow(title: "Native Window Tiling", isOn: $nativeWindowTiling, description: "Combine native macOS drag to edge tiling with Slide's 2x2 snapping gestures.")
                     SliderSettingRow(title: "Grid Spacing", value: $gridSpacing, range: 0...1, label: gridSpacing == 0 ? "Off" : "\(Int((gridSpacing * 16).rounded())) pt")
                     Text("A small distance between windows and screen edges can visually declutter your desktop.")
                         .font(.caption)
                         .foregroundColor(.secondary)
                         .padding(.horizontal)
                         .padding(.bottom, 10)
-                    
-                    ToggleSettingRow(title: "Drag to Unsnap", isOn: $dragToUnsnap, description: "Use the secondary modifier to temporarily disable Drag to Unsnap.")
-                    ToggleSettingRow(title: "Resize Adjacent Windows", isOn: $resizeAdjacent, description: "Quickly resize multiple snapped windows at once by dragging the divider between them.")
                 }
-                
+
                 SettingsSection(title: "Standard Snaps") {
-                    GestureRow(icon: "rectangle.center.inset.filled", iconColor: .blue, title: "Center", gestureIcon: "hand.tap.file", description: "Double tap to unsnap and/or center a window.")
                     GestureRow(icon: "arrow.up.left.and.arrow.down.right", iconColor: .blue, title: "Maximize", gestureIcon: "arrow.up", description: "Swipe up once to fill the entire desktop area.")
-                    GestureRow(icon: "rectangle.split.2x1", iconColor: .blue, title: "Halves", gestureIcon: "arrow.left.and.right", description: "Swipe horizontally to snap to the left or right half of the screen.")
-                    GestureRow(icon: "rectangle.split.1x2", iconColor: .blue, title: "Vertical", gestureIcon: "arrow.up.and.down", description: "Double-swipe vertically to snap to the top or bottom half.")
-                    GestureRow(icon: "rectangle.split.2x2", iconColor: .blue, title: "Quarters", gestureIcon: "arrow.up.right.and.arrow.down.left", description: "Swipe horizontally and vertically to snap to a quarter. Both orders work.")
+                    GestureRow(icon: "rectangle.split.2x1", iconColor: .blue, title: "Halves", gestureIcon: "arrow.left.and.right", description: "Swipe horizontally to snap to the left or right half. Swipe again in the same direction to push the window to the adjacent display.")
+                    GestureRow(icon: "rectangle.split.2x2", iconColor: .blue, title: "Quarters", gestureIcon: "arrow.up.right.and.arrow.down.left", description: "Swipe diagonally — or horizontally and vertically in sequence — to snap to a quarter.")
+                    GestureRow(icon: "rectangle.split.3x1", iconColor: .blue, title: "Thirds & Sixths", gestureIcon: "option", description: "Hold ⌥ while swiping to snap to thirds; add a vertical or diagonal component for sixths.")
                 }
-                
+
                 Spacer()
             }
             .padding(30)
@@ -289,7 +333,7 @@ struct ShortcutsSettingsView: View {
 
                 Group {
                     SettingsSection(title: "Basics") {
-                        ForEach([SnapAction.leftHalf, .rightHalf, .maximize, .minimize, .center]) { action in
+                        ForEach([SnapAction.leftHalf, .rightHalf, .maximize, .minimize, .center, .restore]) { action in
                             ShortcutRow(action: action)
                         }
                     }

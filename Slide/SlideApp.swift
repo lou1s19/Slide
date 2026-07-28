@@ -15,7 +15,7 @@ class SlideAppDelegate: NSObject, NSApplicationDelegate {
         // We delay the UI logic slightly to ensure the RunLoop is ready
         DispatchQueue.main.async {
             guard let manager = self.accessManager else { return }
-            
+
             if !manager.isTrusted {
                 OnboardingWindowManager.shared.show(manager: manager)
             } else {
@@ -25,15 +25,28 @@ class SlideAppDelegate: NSObject, NSApplicationDelegate {
             }
         }
     }
+
+    // Opening Slide again from Finder/Launchpad while it is already running
+    // should surface the settings window (important when the menu bar icon
+    // is hidden, otherwise the app is unreachable).
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if let manager = accessManager, !manager.isTrusted {
+            OnboardingWindowManager.shared.show(manager: manager)
+        } else {
+            SettingsWindowManager.shared.show()
+        }
+        return true
+    }
 }
 
 @main
 struct SlideApp: App {
     @NSApplicationDelegateAdaptor(SlideAppDelegate.self) var appDelegate
     @StateObject private var accessManager = AccessibilityManager()
+    @AppStorage("showInMenubar") private var showInMenubar: Bool = true
 
     var body: some Scene {
-        MenuBarExtra("Slide", systemImage: "sparkles") {
+        MenuBarExtra("Slide", systemImage: "sparkles", isInserted: $showInMenubar) {
             MenuBarItems(accessManager: accessManager)
         }
         .onChange(of: accessManager.isTrusted) { oldValue, newValue in
