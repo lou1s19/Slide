@@ -44,3 +44,19 @@ Die letzten Änderungen wurden ohne macOS/Xcode geschrieben und noch nicht kompi
 - [ ] Release-Prozess: Archive, Notarisierung, GitHub Releases
 - [ ] Sparkle für Auto-Updates, sobald es Releases gibt
 - [ ] CONTRIBUTING.md, sobald die ersten Contributor anklopfen
+
+---
+
+## Funde aus dem Sichtbarkeits-Check (2026-08-19)
+
+Gemessen ueber die iTunes-Lookup-API, App Store Connect, die GitHub-API und die Sitemap.
+
+### Sichtbarkeit
+
+- [ ] Es gibt kein Release. Wer das Repo findet, kann nichts ausprobieren, sondern
+      muesste selbst bauen. Ein erstes Release mit einer signierten App waere der
+      groesste Einzelschritt fuer dieses Projekt
+- [x] Repo-Topics gesetzt am 19.08.2026 (swift, swiftui, appkit, macos, window-manager,
+      trackpad, gestures, menubar, productivity, open-source)
+- [x] Auf dem GitHub-Profil gepinnt
+- [ ] Stand 19.08.2026: 0 Sterne
