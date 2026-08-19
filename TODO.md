@@ -55,7 +55,7 @@ Gemessen über die iTunes-Lookup-API, App Store Connect, die GitHub-API und die 
 
 - [ ] Es gibt kein Release. Wer das Repo findet, kann nichts ausprobieren, sondern
       müsste selbst bauen. Ein erstes Release mit einer signierten App wäre der
-      größte Einzelschritt fuer dieses Projekt
+      größte Einzelschritt für dieses Projekt
 - [x] Repo-Topics gesetzt am 19.08.2026 (swift, swiftui, appkit, macos, window-manager,
       trackpad, gestures, menubar, productivity, open-source)
 - [x] Auf dem GitHub-Profil gepinnt
